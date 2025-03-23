@@ -1,0 +1,141 @@
+/*
+* IoT Hub Raspberry Pi NodeJS - Microsoft Sample Code - Copyright (c) 2017 - Licensed MIT
+*/
+const wpi = require('wiring-pi');
+const Client = require('azure-iot-device').Client;
+const Message = require('azure-iot-device').Message;
+const Protocol = require('azure-iot-device-mqtt').Mqtt;
+const BME280 = require('bme280-sensor');
+
+const BME280_OPTION = {
+  i2cBusNo: 1, // defaults to 1
+  i2cAddress: BME280.BME280_DEFAULT_I2C_ADDRESS() // defaults to 0x77
+};
+
+const connectionString = 'HostName=iot-hub-data.azure-devices.net;DeviceId=raspberrypi-device;SharedAccessKey=lRdFK3pzeTrhhDWzeMeEx2/0wBqSTC1ACy650KX+qlA=';
+const LEDPin = 4;
+
+var sendingMessage = false;
+var messageId = 0;
+var client, sensor;
+var blinkLEDTimeout = null;
+
+function getRandomInt(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function getRandomElement(array) {
+  return array[Math.floor(Math.random() * array.length)];
+}
+
+function getMessage(cb) {
+  messageId++;
+  sensor.readSensorData()
+    .then(function (data) {
+      const temperature = getRandomInt(-5, 32);
+      const humidity = getRandomInt(20, 80);
+      const windSpeed = getRandomInt(5, 25);
+      const windDirection = getRandomElement(['N', 'E', 'S', 'W', 'NE', 'NW', 'SE', 'SW']);
+      const precipitation = getRandomInt(100, 500);
+      const conditions = getRandomElement(['Sunny', 'Cloudy', 'Foggy', 'Clear', 'Partly Cloudy', 'Mostly Sunny', 'Windy', 'Rain']);
+      
+      cb(JSON.stringify({
+        "temperature": temperature,
+        "humidity": humidity,
+        "windSpeed": windSpeed,
+        "windDirection": windDirection,
+        "precipitation": precipitation,
+        "conditions": conditions
+      }), data.temperature_C > 30);
+    })
+    .catch(function (err) {
+      console.error('Failed to read out sensor data: ' + err);
+    });
+}
+
+function sendMessage() {
+  if (!sendingMessage) { return; }
+
+  getMessage(function (content, temperatureAlert) {
+    var message = new Message(content);
+    message.properties.add('temperatureAlert', temperatureAlert.toString());
+    console.log('Sending message: ' + content);
+    client.sendEvent(message, function (err) {
+      if (err) {
+        console.error('Failed to send message to Azure IoT Hub');
+      } else {
+        blinkLED();
+        console.log('Message sent to Azure IoT Hub');
+      }
+    });
+  });
+}
+
+function onStart(request, response) {
+  console.log('Try to invoke method start(' + request.payload + ')');
+  sendingMessage = true;
+
+  response.send(200, 'Successully start sending message to cloud', function (err) {
+    if (err) {
+      console.error('[IoT hub Client] Failed sending a method response:\n' + err.message);
+    }
+  });
+}
+
+function onStop(request, response) {
+  console.log('Try to invoke method stop(' + request.payload + ')');
+  sendingMessage = false;
+
+  response.send(200, 'Successully stop sending message to cloud', function (err) {
+    if (err) {
+      console.error('[IoT hub Client] Failed sending a method response:\n' + err.message);
+    }
+  });
+}
+
+function receiveMessageCallback(msg) {
+  blinkLED();
+  var message = msg.getData().toString('utf-8');
+  client.complete(msg, function () {
+    console.log('Receive message: ' + message);
+  });
+}
+
+function blinkLED() {
+  // Light up LED for 500 ms
+  if(blinkLEDTimeout) {
+       clearTimeout(blinkLEDTimeout);
+   }
+  wpi.digitalWrite(LEDPin, 1);
+  blinkLEDTimeout = setTimeout(function () {
+    wpi.digitalWrite(LEDPin, 0);
+  }, 500);
+}
+
+// set up wiring
+wpi.setup('wpi');
+wpi.pinMode(LEDPin, wpi.OUTPUT);
+sensor = new BME280(BME280_OPTION);
+sensor.init()
+  .then(function () {
+    sendingMessage = true;
+  })
+  .catch(function (err) {
+    console.error(err.message || err);
+  });
+
+// create a client
+client = Client.fromConnectionString(connectionString, Protocol);
+
+client.open(function (err) {
+  if (err) {
+    console.error('[IoT hub Client] Connect error: ' + err.message);
+    return;
+  }
+
+  // set C2D and device method callback
+  client.onDeviceMethod('start', onStart);
+  client.onDeviceMethod('stop', onStop);
+  client.on('message', receiveMessageCallback);
+  setInterval(sendMessage, 2000);
+});
