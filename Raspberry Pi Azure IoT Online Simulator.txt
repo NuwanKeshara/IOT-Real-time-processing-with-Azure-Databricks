@@ -46,7 +46,7 @@ function getMessage(cb) {
         "windDirection": windDirection,
         "precipitation": precipitation,
         "conditions": conditions
-      }), data.temperature_C > 30);
+      }), true);
     })
     .catch(function (err) {
       console.error('Failed to read out sensor data: ' + err);
